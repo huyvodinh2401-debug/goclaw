@@ -1,0 +1,41 @@
+name: Fix GOCLAW_POSTGRES_DSN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and fix
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -e
+            CID=$(docker ps -a --filter name=goclaw-goclaw-1 --format '{{.ID}}')
+            DIR=$(docker inspect $CID --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')
+            echo "compose dir: $DIR"
+            cd "$DIR"
+            ls -la
+            if [ -f .env ] && grep -q '^GOCLAW_POSTGRES_DSN=' .env; then
+              LEN=$(grep '^GOCLAW_POSTGRES_DSN=' .env | wc -c)
+              echo "GOCLAW_POSTGRES_DSN already present in .env (length=$LEN), leaving as is"
+            else
+              echo 'GOCLAW_POSTGRES_DSN missing in .env, reconstructing from postgres container env'
+              PGUSER=$(docker exec goclaw-postgres-1 printenv POSTGRES_USER)
+              PGPASS=$(docker exec goclaw-postgres-1 printenv POSTGRES_PASSWORD)
+              PGDB=$(docker exec goclaw-postgres-1 printenv POSTGRES_DB)
+              echo "GOCLAW_POSTGRES_DSN=postgres://$PGUSER:$PGPASS@postgres:5432/$PGDB?sslmode=disable" >> .env
+              echo "added GOCLAW_POSTGRES_DSN to .env (value hidden), user=$PGUSER db=$PGDB"
+            fi
+            echo '=== restart goclaw service ==='
+            docker compose up -d --force-recreate goclaw
+            sleep 8
+            echo '=== docker ps -a ==='
+            docker ps -a
+            echo '=== new logs ==='
+            docker logs --tail 30 goclaw-goclaw-1
